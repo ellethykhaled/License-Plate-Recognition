@@ -7,7 +7,7 @@ import streamlit as st
 directory_path = "./images"
 images = os.listdir(directory_path)
 availableCars = []
-sampleNumber = 5
+sampleNumber = 13
 for i in range(sampleNumber):
     sampleName = "sample" + str(i + 1) + ".jpg"
     availableCars.append(sampleName)
@@ -52,5 +52,4 @@ if imageName:
                         bar.progress(100)
                         st.subheader("OCR output:")
                         st.markdown("**" + ocrOutput + "**")
-                        st.balloons()
                         st.markdown("---")

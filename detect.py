@@ -8,83 +8,221 @@ import pytesseract
 from commonfunctions import *
 
 class LicenceDetection:
-    harris_corner = True
+    harris_corner = False
     increase_number = 20
     debug = False
 
+    # Gets the map containing vertical edges using built-in sobel filter
     @staticmethod
     def detectVerticalEdges(image):
         verticalEdgesDetectedImage = np.abs(sobel_v(image))
         return verticalEdgesDetectedImage
 
+    # This function gets the map containing weighted edges (strong and weak)
     @staticmethod
     def getWeightedEdges(verticalEdgesMap):
-        imgMean = np.mean(verticalEdgesMap.reshape(-1))
-        thresh = imgMean + 3.5 * imgMean
+        imageMean = np.mean(verticalEdgesMap)
+        # The threshold used in image binarization 
+        threshVx = imageMean + 3.5 * imageMean
 
         prevX = 0
         prevY = 0
         dist = 0
-        weighted_edges = np.copy(verticalEdgesMap)
+        weightedEdges = np.copy(verticalEdgesMap)
+        # Looping on each and every pixel
         for x in range(verticalEdgesMap.shape[1]):
             for y in range(verticalEdgesMap.shape[0]):
-                if verticalEdgesMap[y, x] > thresh:
-                    if dist == 0:
-                        prevX = x
-                        prevY = y
-                        dist = 1
-                        weighted_edges[y,x] = 1
+                if verticalEdgesMap[y, x] > threshVx:
+                    # In case the current pixel's intensity is greater than the threshold
+                    # calculate the distance between it and the previous edge
+                    dist = math.sqrt((prevX - x) ** 2 + (prevY - y) ** 2)
+                    if dist < 15:
+                        # Count it as a strong edge if the distance is less than 15
+                        weightedEdges[y, x] = 1
                     else:
-                        dist = math.sqrt((prevX-x)**2 + (prevY-y)**2)
-                        if dist < 15:
-                            weighted_edges[y,x] = 1
-                        else:
-                            weighted_edges[y,x] = 0.5
+                        # Otherwise, count it as a weak edge
+                        weightedEdges[y, x] = 0.5
                 else:
-                    weighted_edges[y,x] = 0
-        return weighted_edges
+                    # Otherwise, reset the pixel as a non-edge
+                    weightedEdges[y, x] = 0
+        return weightedEdges
 
     @staticmethod
-    def initial_roi_region(weighted_edges, gray_img):
-        
-        # Threshold rows depending on edges variance
-        row_var = np.var(weighted_edges, axis=1)
-        thresh = max(row_var)/3
-        roi_img = np.zeros(weighted_edges.shape)
-        roi_img[row_var>thresh, :] = gray_img[row_var>thresh, :]
+    def initialRoiRegion(weightedEdges, grayImage):
+        # Calculate the variance for each vertical edge within the map of weighted edges
+        rowVariance = np.var(weightedEdges, axis = 1)
+        # Get the threshold (as in page 7)
+        threshVarMax = max(rowVariance) / 3
+        roiImage = np.zeros(weightedEdges.shape)
+        # Anything that is greater than the threshold calculated is taken into consideration,
+        # otherwise, is kept as 0
+        roiImage[rowVariance > threshVarMax, :] = grayImage[rowVariance > threshVarMax, :]
 
-        # Get ROI regions and then filter them
-        roi_sum = np.sum(roi_img, axis=1)
-        roi_start = 0
-        roi_end = 0
-        roi_regions = []
+        # An array of sums for each region
+        roiSum = np.sum(roiImage, axis = 1)
+        # Iterators to keep track of the start and end of the roi regions
+        roiStart = 0
+        roiEnd = 0
+        # A list to keep track of the start and end of the roi regions
+        roiRegions = []
 
         inRegion = False
-        for i in range(len(roi_sum)):
-            if roi_sum[i] != 0 and inRegion == False:
-                if len(roi_regions) != 0 and i-roi_regions[-1][1] < 10:
-                    roi_start,_ = roi_regions.pop()
+        for i in range(len(roiSum)):
+            if roiSum[i] != 0 and inRegion == False:
+                # If the list is not empty and the roiEnd added last subtracted
+                # from the main iterator (i) is less than 10, remove the last
+                # ROI and set the roiStart iterator with the removed ROI 
+                if len(roiRegions) != 0 and i - roiRegions[-1][1] < 10:
+                    roiStart, _ = roiRegions.pop()
                 else:
-                    roi_start = i
+                    roiStart = i
                 inRegion = True
-            if roi_sum[i] == 0 and inRegion == True:
-                roi_end = i-1
+            if roiSum[i] == 0 and inRegion == True:
+                roiEnd = i - 1
                 inRegion = False
                 
-                if roi_end - roi_start >15:
-                    roi_regions.append([roi_start, roi_end])
+                # ROI with height less than 15 are not considered
+                if roiEnd - roiStart > 15:
+                    roiRegions.append([roiStart, roiEnd])
 
-        if LicenceDetection.debug:
-            print(roi_regions)
-        if len(roi_regions) == 0 or roi_regions[-1][0] != roi_start:
-            roi_regions.append([roi_start,roi_end])
+        # Append the saved iterators to the roiRegions list in case the list is empty
+        # or the iterators are not in the list (written like that to prevent runtime error)
+        if len(roiRegions) == 0 or roiRegions[-1][0] != roiStart:
+            roiRegions.append([roiStart,roiEnd])
 
-        filtered_regions = []
-        for region in roi_regions:
-            if region[1] - region[0] > 10 and region[1] - region[0] < gray_img.shape[0]/3:
-                filtered_regions.append(region)
+        filteredRegions = []
+        for region in roiRegions:
+            # Take only the regions within the given sizes
+            if region[1] - region[0] > 10 and region[1] - region[0] < grayImage.shape[0] / 4.5:
+                filteredRegions.append(region)
         
-        return filtered_regions
+        return filteredRegions
+
+    @staticmethod
+    def getBestRegion(roiRegions, weightedEdges, image):
+
+        # Return the whole image
+        if len(roiRegions) == 0 : return [0, image.shape[0]]
+        
+        # Return the single roi extracted
+        if len(roiRegions) == 1 : return roiRegions[0]
+        
+        bestRegionIndex = 0
+        bestWeight = 0
+        
+        if LicenceDetection.harris_corner:
+            # Looping on all ROIs extracted
+            for i in range(len(roiRegions)):
+                # Get the ROI as a 2D colored image (with 3 channels)
+                regionImage = image[roiRegions[i][0] : roiRegions[i][1], :]
+                gray = np.float32(regionImage)
+                # The Harris corner detector takes the image,
+                # block size, aperture parameter of the Sobel derivative and 'k' free parameter
+                dst = cv2.cornerHarris(gray, 4, 7, 0.2)
+                # Dilation is used to remove unimportant corners
+                dst = cv2.dilate(dst, None)
+                
+                # A map containing important corners
+                testImage = np.zeros(regionImage.shape)
+                testImage[dst > 0.25 * dst.max()] = 255
+           
+                regionWeight = 0
+                # Ignoring extreme left and right parts of the image
+                start = testImage.shape[1] // 4
+                end = testImage.shape[1] - start
+                for k in range(testImage.shape[0]):
+                    prevEdge = 0
+                    for j in range(0,testImage.shape[1]):
+                        # In case of corner point
+                        if testImage[k][j] == 255:
+                            weightFactor = 1 / 50
+                            # Set the weight factor by 50 if not an extreme corner (not left or right)
+                            if j > start and j < end:
+                                weightFactor = 50
+                            if prevEdge == 0:
+                                regionWeight += 1 * weightFactor
+                            else:
+                                dist = np.abs(prevEdge - j)
+                                regionWeight += 1 / np.exp(dist) * weightFactor
+                            prevEdge = j
+                # Divide the region weight by the height of the ROI for fair comparison
+                regionWeight /= (roiRegions[i][1] - roiRegions[i][0])
+                if bestWeight < regionWeight:
+                    bestWeight = regionWeight
+                    bestRegionIndex = i
+        else:
+            # Looping on all ROIs to calculate the weight of each one
+            for i in range(len(roiRegions)):
+                # Get the ROI as a 2D colored image (with 3 channels)
+                regionImage = weightedEdges[roiRegions[i][0] : roiRegions[i][1], :]
+                regionWeight = 0
+                for k in range(regionImage.shape[0]):
+                    prevEdge = 0
+                    # Ignore the extreme left and right of the image
+                    for j in range(20, regionImage.shape[1] - 20):
+                        if regionImage[k][j] != 0:
+                            if prevEdge == 0:
+                                regionWeight += 1
+                            else:
+                                # As the distance between the current edge and previous edge increases
+                                # the weight added for the current region decreases (negative exponential)
+                                dist = np.abs(prevEdge - j) 
+                                regionWeight += 1 / np.exp(dist)
+                            prevEdge = j
+                # Divide the region weight by the height of the ROI for fair comparison
+                regionWeight /= (roiRegions[i][1] - roiRegions[i][0])
+                # If the calculated weight is better than the best weight calculated, make it the best weight
+                if bestWeight < regionWeight:
+                    bestWeight = regionWeight
+                    bestRegionIndex = i
+        
+        return roiRegions[bestRegionIndex]
+
+    @staticmethod
+    def extract_license(image):
+
+        # Apply some preprocessing to the region of interest in order to get the edges        
+        image = image.astype('uint8')
+        gray = cv2.bilateralFilter(image, 11, 17, 17)
+        
+        edged = sobel(gray)
+        th = threshold_otsu(np.abs(edged))
+        edged = edged > th
+        edged = edged.astype('uint8')
+
+        # Find contours based on Edges of ROI, 
+        # The other two parameters are the contour heirarchy (external boundaries),
+        # and contour approximation which removes the redundant points in this case
+        contours = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Concerned only with the boundary points of the contour
+        contours = contours[0] if len(contours) == 2 else contours[1]
+        # Sort the greatest 50 given contours based on the contour area in descending order
+        contours = sorted(contours, key = cv2.contourArea, reverse = True)[:50]
+
+        # Looping on each contour
+        for contour in contours:
+            # Given the contour (2D point set),
+            # returns the rectangle [center(x, y), (width, height), angleOfRotation]
+            rectangle = cv2.minAreaRect(contour)
+            # Given the rectangle, returns a set of points ordered in clockwise direction
+            box = np.int0(cv2.boxPoints(rectangle))
+            _, start, _, end = box
+            width = np.abs(end[0] - start[0])
+            height = np.abs(end[1] - start[1])
+            if width > height and width > 150:
+                xStart = min(start[0], end[0])
+                xEnd = max(start[0], end[0])
+                detectedLicensePlate = image[:, xStart : xEnd]
+                sortedX = box[np.argsort(box[:, 0])]
+                startEdges = sortedX[0 : 2]
+                endEdges = sortedX[2 :]
+                start = startEdges[np.argsort(startEdges[:, 1])][0]
+                end = endEdges[np.argsort(endEdges[:, 1])][0]
+            
+                angle = np.rad2deg(np.arctan2(end[1] - start[1], end[0] - start[0]))
+                detectedLicensePlate = ndimage.rotate(detectedLicensePlate, angle, cval = 255)
+                return detectedLicensePlate
 
     @staticmethod
     def character_segmentation(image):
@@ -129,13 +267,12 @@ class LicenceDetection:
         print('Segmented Character' ,detected_lpr_text)
         return lpr, segmented_char, detected_lpr_text
 
-
     @staticmethod
     def detectLicense(image, gray_img):
         v_edges = LicenceDetection.detectVerticalEdges(image)
         weighted_edges = LicenceDetection.getWeightedEdges(v_edges)
-        initial_roi_regions = LicenceDetection.initial_roi_region(weighted_edges,image)
-        roi_region = LicenceDetection.get_best_region(initial_roi_regions, weighted_edges, image)
+        initial_roi_regions = LicenceDetection.initialRoiRegion(weighted_edges,image)
+        roi_region = LicenceDetection.getBestRegion(initial_roi_regions, weighted_edges, image)
         if roi_region[0] < LicenceDetection.increase_number:
             roi_region[0] = 0
         else:
@@ -150,119 +287,3 @@ class LicenceDetection:
             return None, None, None, None
         lpr, segmented_char, ocr_output = LicenceDetection.character_segmentation(lpr_detected)
         return lpr_detected, lpr, segmented_char, ocr_output
-    
-    @staticmethod
-    def extract_license(image):
-        
-        image = image.astype('uint8')
-        gray = cv2.bilateralFilter(image, 11, 17, 17)
-
-        # Detect edges and binarize image
-        edged = sobel(gray)
-        th = threshold_otsu(np.abs(edged))
-        edged = edged > th
-        edged = edged.astype('uint8')
-        if LicenceDetection.debug:
-            io.imshow(edged)
-            io.show()
-
-        # Find contours based on Edges
-        cnts  = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-       
-        # Top 30 Contours
-        img2 = image.copy()
-        cnts = cnts[0] if len(cnts) == 2 else cnts[1]
-        cnts=sorted(cnts, key = cv2.contourArea, reverse = True)[:50]
-
-        for cnt in cnts:
-            rect = cv2.minAreaRect(cnt)
-            box = np.int0(cv2.boxPoints(rect))
-            _, start, _, end = box
-            w = np.abs(end[0] - start[0])
-            h = np.abs(end[1] - start[1])
-            if w > h  and w > 150  :
-                x_start = min(start[0], end[0])
-                x_end = max(start[0], end[0])
-                lpr_detected = image[:, x_start:x_end]
-                x_sorted = box[np.argsort(box[:,0])]
-                start_edges = x_sorted[0:2]
-                end_edges = x_sorted[2:]
-                start =start_edges[np.argsort(start_edges[:,1])][0]
-                end = end_edges[np.argsort(end_edges[:,1])][0]
-            
-                angle = np.rad2deg(np.arctan2(
-                    end[1] - start[1], end[0] - start[0]))
-                lpr_detected = ndimage.rotate(lpr_detected, angle, cval=255)
-                return lpr_detected
-
-    @staticmethod
-    def get_best_region(roi_regions,weighted_edges,img):
-
-        if len(roi_regions) == 0 : return [0,img.shape[0]]
-        if len(roi_regions) == 1 : return roi_regions[0];
-        
-        best_region = 0
-        best_weight = 0
-        
-        if LicenceDetection.harris_corner:
-
-            for i in range(len(roi_regions)):
-                region_image = img[roi_regions[i][0]:roi_regions[i][1],:]
-                if LicenceDetection.debug:
-                    io.imshow(region_image)
-                    io.show()
-                gray = np.float32(region_image)
-                dst = cv2.cornerHarris(gray,4,7,0.2)
-                dst = cv2.dilate(dst,None)
-                test_img = np.zeros(region_image.shape)
-                test_img[dst>0.25*dst.max()]=255
-           
-                region_weight = 0
-                start = test_img.shape[1]//4
-                end = test_img.shape[1] - start
-                for k in range(test_img.shape[0]):
-                    prev_edge = 0
-                    for j in range(0,test_img.shape[1]):
-                        if test_img[k][j] == 255:
-                            current_weight = 1/50
-                            if j > start and j < end:
-                                current_weight = 50
-                            if prev_edge == 0:
-                                region_weight += 1 * current_weight * k
-                                prev_edge = j
-                            else:
-                                dist = math.sqrt((prev_edge-j)**2)
-                                prev_edge = j
-                                region_weight += 1/np.exp(dist) * current_weight * k
-                if LicenceDetection.debug:
-                    print('normal weight ',region_weight)
-                    print('height ',region_weight/(roi_regions[i][1]-roi_regions[i][0]))
-                region_weight /= (roi_regions[i][1]-roi_regions[i][0])
-                if best_weight < region_weight:
-                    best_weight = region_weight
-                    best_region = i
-        else:
-            
-            #Edge Power calculation
-            for i in range(len(roi_regions)):
-                region_image = weighted_edges[roi_regions[i][0]:roi_regions[i][1],:]
-                region_weight = 0
-                for k in range(region_image.shape[0]):
-                    prev_edge = 0
-                    for j in range(50,region_image.shape[1]-200):
-                        if region_image[k][j] != 0:
-                            if prev_edge == 0:
-                                region_weight += 1
-                                prev_edge = j
-                            else:
-                                dist = math.sqrt((prev_edge-j)**2) 
-                                prev_edge = j
-                                region_weight += 1/np.exp(dist)
-                
-                if best_weight < region_weight:
-                    best_weight = region_weight
-                    best_region = i
-        
-
-        return roi_regions[best_region]
-
