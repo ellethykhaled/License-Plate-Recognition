@@ -179,7 +179,7 @@ class LicenceDetection:
         return roiRegions[bestRegionIndex]
 
     @staticmethod
-    def extract_license(image):
+    def extractLicense(image):
 
         # Apply some preprocessing to the region of interest in order to get the edges        
         image = image.astype('uint8')
@@ -200,6 +200,8 @@ class LicenceDetection:
         # Sort the greatest 50 given contours based on the contour area in descending order
         contours = sorted(contours, key = cv2.contourArea, reverse = True)[:50]
 
+        # A list for holding candidates for being the license plate
+        detectedPlates = []
         # Looping on each contour
         for contour in contours:
             # Given the contour (2D point set),
@@ -207,25 +209,39 @@ class LicenceDetection:
             rectangle = cv2.minAreaRect(contour)
             # Given the rectangle, returns a set of points ordered in clockwise direction
             box = np.int0(cv2.boxPoints(rectangle))
+
+            # By considering two points on the same diagonal (any diagonal)
             _, start, _, end = box
+            # Calculating the width and height given the points of the ends of the diagonal
             width = np.abs(end[0] - start[0])
             height = np.abs(end[1] - start[1])
+
+            # Consider only the if the region has a width greater than 150 (By trial) and greater than the height
             if width > height and width > 150:
                 xStart = min(start[0], end[0])
                 xEnd = max(start[0], end[0])
+
+                # Cropping the image on the x-axis only
                 detectedLicensePlate = image[:, xStart : xEnd]
-                sortedX = box[np.argsort(box[:, 0])]
-                startEdges = sortedX[0 : 2]
-                endEdges = sortedX[2 :]
-                start = startEdges[np.argsort(startEdges[:, 1])][0]
-                end = endEdges[np.argsort(endEdges[:, 1])][0]
+
+                # Collecting the points in two vertical edges (strating edge and ending edge)
+                sortedBasedOnX = box[np.argsort(box[:, 0])]
+                pointsOfStartingVerticalEdge = sortedBasedOnX[0 : 2]
+                pointsOfEndingVerticalEdge = sortedBasedOnX[2 :]
+
+                # Get the lower points of the two vertical edges
+                lowerPointOfStart = pointsOfStartingVerticalEdge[np.argsort(pointsOfStartingVerticalEdge[:, 1])][0]
+                lowerPointOfEnd = pointsOfEndingVerticalEdge[np.argsort(pointsOfEndingVerticalEdge[:, 1])][0]
             
-                angle = np.rad2deg(np.arctan2(end[1] - start[1], end[0] - start[0]))
-                detectedLicensePlate = ndimage.rotate(detectedLicensePlate, angle, cval = 255)
+                # Getting the angle of rotation of the horizontal edges using the slope of the lower edge -> (y2 - y1) / (x2 - x1)
+                angleOfRotation = np.rad2deg(np.arctan2(lowerPointOfEnd[1] - lowerPointOfStart[1], lowerPointOfEnd[0] - lowerPointOfStart[0]))
+                detectedLicensePlate = ndimage.rotate(detectedLicensePlate, angleOfRotation, cval = 255)
                 return detectedLicensePlate
+        #         detectedPlates.append(detectedLicensePlate)
+        # return detectedPlates
 
     @staticmethod
-    def character_segmentation(image):
+    def characterSegmentation(image):
         lpr = image.copy()
         thrs = threshold_otsu(lpr)
         lpr = lpr
@@ -282,8 +298,8 @@ class LicenceDetection:
         else:
             roi_region[1] += LicenceDetection.increase_number
 
-        lpr_detected = LicenceDetection.extract_license(gray_img[roi_region[0]: roi_region[1], :])
+        lpr_detected = LicenceDetection.extractLicense(gray_img[roi_region[0]: roi_region[1], :])
         if lpr_detected is None:
             return None, None, None, None
-        lpr, segmented_char, ocr_output = LicenceDetection.character_segmentation(lpr_detected)
+        lpr, segmented_char, ocr_output = LicenceDetection.characterSegmentation(lpr_detected)
         return lpr_detected, lpr, segmented_char, ocr_output
