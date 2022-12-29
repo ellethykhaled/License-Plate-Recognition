@@ -236,70 +236,94 @@ class LicenceDetection:
                 # Getting the angle of rotation of the horizontal edges using the slope of the lower edge -> (y2 - y1) / (x2 - x1)
                 angleOfRotation = np.rad2deg(np.arctan2(lowerPointOfEnd[1] - lowerPointOfStart[1], lowerPointOfEnd[0] - lowerPointOfStart[0]))
                 detectedLicensePlate = ndimage.rotate(detectedLicensePlate, angleOfRotation, cval = 255)
-                return detectedLicensePlate
-        #         detectedPlates.append(detectedLicensePlate)
-        # return detectedPlates
+                # return detectedLicensePlate
+                detectedPlates.append(detectedLicensePlate)
+        # If there are no plates detected according to te previous algorithm
+        # Take (hopelessly) the whole the middle third of the ROI and the whole ROI 
+        if (len(detectedPlates) == 0):
+            widthOfImage = gray.shape[1]
+            detectedPlates.append(gray[:, widthOfImage // 4 : 3 * widthOfImage // 4])
+            detectedPlates.append(gray)
+        return detectedPlates
 
     @staticmethod
-    def characterSegmentation(image):
-        lpr = image.copy()
-        thrs = threshold_otsu(lpr)
-        lpr = lpr
-        lpr[lpr <= thrs] = 0
-        lpr[lpr > thrs] = 255
-        contours, hier = cv2.findContours(lpr, cv2.RETR_TREE,cv2.CHAIN_APPROX_NONE)
+    def characterSegmentation(images):
+        candidates = []
+        for image in images:
+            licensePlateRecognition = image.copy()
 
-        contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[0])
-        characters = []
-        available_text = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-        tess_config = f"-c tessedit_char_whitelist={available_text} --psm 10"
-        pytesseract.pytesseract.tesseract_cmd = r'D:\\Programs\\Tesseract-OCR\\tesseract.exe'
-        detected_lpr_text = ''
-        for contour in contours:
-        # Get bounding box
-            x, y, w, h = cv2.boundingRect(contour)
+            # Image binarization using the OTSU which gets the optimal threshold based on the image histogram
+            threshold = threshold_otsu(licensePlateRecognition)
+            licensePlateRecognition[licensePlateRecognition <= threshold] = 0
+            licensePlateRecognition[licensePlateRecognition > threshold] = 255
+            contours, _ = cv2.findContours(licensePlateRecognition, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
 
-            if w * h < 800 and w*h > 200:
+            # Given the contour, get the value of x
+            xFunction = lambda ctr: cv2.boundingRect(ctr)[0]
+            # Sort the contours based on the value of x (from left to right)
+            contours = sorted(contours, key = xFunction)
 
-                # Getting ROI
-                roi = lpr[y:y+h, x:x+w]
-                roi = np.pad(roi,1, constant_values= 255)
-                roi = cv2.erode(roi,None)
-                text = pytesseract.image_to_string(roi, config=tess_config, lang="eng").split()
-                if len(text) == 1 and text[0] in available_text:
-                    characters.append(roi)
-                    detected_lpr_text += text[0]
-        
-        #concatenate segmented characters
-        min_shape = sorted( [(np.sum(i.size), i.size ) for i in characters])[0]
-        characters_comb = []
-        for char in characters:
-            characters_comb.append(cv2.resize(char,min_shape, interpolation = cv2.INTER_CUBIC))
+            # Contains the path (as raw string where backslash '\' is needed) to the tesseract program
+            pytesseract.pytesseract.tesseract_cmd = r'D:\\Programs\\Tesseract-OCR\\tesseract.exe'
+            # Setting the available letters and tessaract Configuration
+            availableText = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+            psmMode = 10
+            # psm is the page segmentation mode, consider PSM 7 for LPR
+            tesseractConfig = f"-c tessedit_char_whitelist={availableText} --psm {psmMode}"
+            detectedLprText = ''
+            characters = []
+            for contour in contours:
+            # Get bounding box
+                x, y, w, h = cv2.boundingRect(contour)
 
-        segmented_char = cv2.hconcat(characters_comb)
-        tess_config = "-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 --psm 6"
-        text = pytesseract.image_to_string(lpr, config=tess_config, lang="eng")
-        print('Full Licence Photo', text)
-        print('Segmented Character' ,detected_lpr_text)
-        return lpr, segmented_char, detected_lpr_text
+                if w * h < 800 and w * h > 200:
+
+                    # Getting ROI
+                    roi = licensePlateRecognition[y : y + h, x : x + w]
+                    roi = np.pad(roi, 1, constant_values = 255)
+                    roi = cv2.erode(roi, None)
+                    text = pytesseract.image_to_string(roi, config = tesseractConfig, lang = "eng").split()
+                    if len(text) == 1 and text[0] in availableText:
+                        characters.append(roi)
+                        detectedLprText += text[0]
+            
+            #concatenate segmented characters
+            if (len(characters) == 0):
+                continue
+            minShape = sorted( [(np.sum(i.size), i.size ) for i in characters])[0]
+            charactersComb = []
+            for char in characters:
+                charactersComb.append(cv2.resize(char,minShape, interpolation = cv2.INTER_CUBIC))
+
+            segmentedChar = cv2.hconcat(charactersComb)
+            psmMode = 7
+            tesseractConfig = f"-c tessedit_char_whitelist={availableText} --psm {psmMode}"
+            text = pytesseract.image_to_string(licensePlateRecognition, config = tesseractConfig, lang = "eng")
+            print('Full Licence Photo', text)
+            print('Segmented Character', detectedLprText)
+            candidates.append([licensePlateRecognition, segmentedChar, detectedLprText])
+        return candidates
 
     @staticmethod
-    def detectLicense(image, gray_img):
-        v_edges = LicenceDetection.detectVerticalEdges(image)
-        weighted_edges = LicenceDetection.getWeightedEdges(v_edges)
-        initial_roi_regions = LicenceDetection.initialRoiRegion(weighted_edges,image)
-        roi_region = LicenceDetection.getBestRegion(initial_roi_regions, weighted_edges, image)
-        if roi_region[0] < LicenceDetection.increase_number:
-            roi_region[0] = 0
-        else:
-            roi_region[0] -= LicenceDetection.increase_number
-        if image.shape[0] - roi_region[1] < LicenceDetection.increase_number:
-            roi_region[1] = image.shape[0]
-        else:
-            roi_region[1] += LicenceDetection.increase_number
+    def detectLicense(image, grayImage):
+        verticalEdges = LicenceDetection.detectVerticalEdges(image)
+        weightedEdges = LicenceDetection.getWeightedEdges(verticalEdges)
+        initialRoiRegion = LicenceDetection.initialRoiRegion(weightedEdges,image)
+        bestRoi = LicenceDetection.getBestRegion(initialRoiRegion, weightedEdges, image)
 
-        lpr_detected = LicenceDetection.extractLicense(gray_img[roi_region[0]: roi_region[1], :])
-        if lpr_detected is None:
+        if bestRoi[0] < LicenceDetection.increase_number:
+            bestRoi[0] = 0
+        else:
+            bestRoi[0] -= LicenceDetection.increase_number
+        if image.shape[0] - bestRoi[1] < LicenceDetection.increase_number:
+            bestRoi[1] = image.shape[0]
+        else:
+            bestRoi[1] += LicenceDetection.increase_number
+
+        detectedLPR = LicenceDetection.extractLicense(grayImage[bestRoi[0]: bestRoi[1], :])
+
+        # In case there are no candidates detected
+        if len(detectedLPR) == 0:
             return None, None, None, None
-        lpr, segmented_char, ocr_output = LicenceDetection.characterSegmentation(lpr_detected)
-        return lpr_detected, lpr, segmented_char, ocr_output
+        LicenseCandidates = LicenceDetection.characterSegmentation(detectedLPR)
+        return detectedLPR[0], LicenseCandidates[0][0], LicenseCandidates[0][1], LicenseCandidates[0][2]
