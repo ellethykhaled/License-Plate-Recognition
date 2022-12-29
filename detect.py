@@ -2,13 +2,13 @@ import cv2
 import numpy as np
 import math
 from skimage import io
-from skimage.filters import  sobel_v,threshold_otsu,sobel
+from skimage.filters import sobel_v,threshold_otsu,sobel
 from scipy import ndimage
 import pytesseract
 from commonfunctions import *
 
 class LicenceDetection:
-    harris_corner = False
+    harris_corner = True
     increase_number = 20
     debug = False
 
@@ -39,6 +39,8 @@ class LicenceDetection:
                     if dist < 15:
                         # Count it as a strong edge if the distance is less than 15
                         weightedEdges[y, x] = 1
+                        prevY = y
+                        prevX = x
                     else:
                         # Otherwise, count it as a weak edge
                         weightedEdges[y, x] = 0.5
@@ -72,28 +74,30 @@ class LicenceDetection:
                 # If the list is not empty and the roiEnd added last subtracted
                 # from the main iterator (i) is less than 10, remove the last
                 # ROI and set the roiStart iterator with the removed ROI 
+                # We can take upto 10 lines in black in our ROI
                 if len(roiRegions) != 0 and i - roiRegions[-1][1] < 10:
                     roiStart, _ = roiRegions.pop()
                 else:
                     roiStart = i
                 inRegion = True
+            # When we find a black line and within the same region
             if roiSum[i] == 0 and inRegion == True:
                 roiEnd = i - 1
                 inRegion = False
                 
-                # ROI with height less than 15 are not considered
+                # ROshow_images([roiRegions])I with height less than 15 are not considered
                 if roiEnd - roiStart > 15:
                     roiRegions.append([roiStart, roiEnd])
 
         # Append the saved iterators to the roiRegions list in case the list is empty
         # or the iterators are not in the list (written like that to prevent runtime error)
         if len(roiRegions) == 0 or roiRegions[-1][0] != roiStart:
-            roiRegions.append([roiStart,roiEnd])
+            roiRegions.append([roiStart, roiEnd])
 
         filteredRegions = []
         for region in roiRegions:
             # Take only the regions within the given sizes
-            if region[1] - region[0] > 10 and region[1] - region[0] < grayImage.shape[0] / 4.5:
+            if region[1] - region[0] < grayImage.shape[0] / 4.5:
                 filteredRegions.append(region)
         
         return filteredRegions
@@ -118,13 +122,13 @@ class LicenceDetection:
                 gray = np.float32(regionImage)
                 # The Harris corner detector takes the image,
                 # block size, aperture parameter of the Sobel derivative and 'k' free parameter
-                dst = cv2.cornerHarris(gray, 4, 7, 0.2)
-                # Dilation is used to remove unimportant corners
-                dst = cv2.dilate(dst, None)
+                destination = cv2.cornerHarris(gray, 4, 7, 0.2)
+                # Dilation is used to mark the corners
+                destination = cv2.dilate(destination, None)
                 
-                # A map containing important corners
+                # A map containing important corners (Threshold with 0.25 of max)
                 testImage = np.zeros(regionImage.shape)
-                testImage[dst > 0.25 * dst.max()] = 255
+                testImage[destination > 0.25 * destination.max()] = 255
            
                 regionWeight = 0
                 # Ignoring extreme left and right parts of the image
@@ -135,13 +139,17 @@ class LicenceDetection:
                     for j in range(0,testImage.shape[1]):
                         # In case of corner point
                         if testImage[k][j] == 255:
+                            # By trial
                             weightFactor = 1 / 50
                             # Set the weight factor by 50 if not an extreme corner (not left or right)
                             if j > start and j < end:
+                                # By trial
                                 weightFactor = 50
+
                             if prevEdge == 0:
                                 regionWeight += 1 * weightFactor
                             else:
+                                # Not plagiarised
                                 dist = np.abs(prevEdge - j)
                                 regionWeight += 1 / np.exp(dist) * weightFactor
                             prevEdge = j
@@ -310,7 +318,7 @@ class LicenceDetection:
         weightedEdges = LicenceDetection.getWeightedEdges(verticalEdges)
         initialRoiRegion = LicenceDetection.initialRoiRegion(weightedEdges,image)
         bestRoi = LicenceDetection.getBestRegion(initialRoiRegion, weightedEdges, image)
-
+        # bestRoi = initialRoiRegion[1]
         if bestRoi[0] < LicenceDetection.increase_number:
             bestRoi[0] = 0
         else:

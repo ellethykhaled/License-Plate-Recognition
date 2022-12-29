@@ -27,29 +27,25 @@ if imageName:
     st.image(img, channels="RGB")
     st.markdown("---")
     
-    st.sidebar.text("License Plate Recognition Progress:")
-    bar = st.sidebar.progress(0)
+    # st.sidebar.text("License Plate Recognition Progress:")
+    # bar = st.sidebar.progress(0)
     with st.spinner('Preparing plate...'):
         licensePlateImage, lpr, segmentedCharacter, ocrOutput = pipelineExecution()
     
     if licensePlateImage is not None:
-        if st.sidebar.checkbox("Show plate"):
-            bar.progress(25)
-            st.subheader("Detected Plate:")
-            st.image(licensePlateImage, use_column_width=True, clamp = True)
-            st.markdown("---")
-            if st.sidebar.checkbox("Binarize"):
-                bar.progress(50)
-                st.subheader("Binarized Plate:")
-                st.image(lpr, use_column_width=True, clamp = True)
-                st.markdown("---")
-                if st.sidebar.checkbox("Show segmented characters"):
-                    bar.progress(75)
-                    st.subheader("Segmented Characters:")
-                    st.image(segmentedCharacter, use_column_width=True, clamp = True)
-                    st.markdown("---")
-                    if st.sidebar.checkbox("Show OCR output"):
-                        bar.progress(100)
-                        st.subheader("OCR output:")
-                        st.markdown("**" + ocrOutput + "**")
-                        st.markdown("---")
+        # if st.sidebar.checkbox("Show plate"):
+            # bar.progress(25)
+        st.subheader("Detected Plate:")
+        st.image(licensePlateImage, use_column_width = True, clamp = True)
+        st.markdown("---")
+            # if st.sidebar.checkbox("Binarize"):
+                # bar.progress(50)
+        st.subheader("Binarized Plate:")
+        st.image(lpr, use_column_width = True, clamp = True)
+        st.markdown("---")
+        st.subheader("Segmented Characters:")
+        st.image(segmentedCharacter, use_column_width = True, clamp = True)
+        st.markdown("---")
+        st.subheader("OCR output:")
+        st.markdown("**" + ocrOutput + "**")
+        st.markdown("---")
